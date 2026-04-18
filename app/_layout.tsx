@@ -1,24 +1,55 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect, useState } from 'react';
 import 'react-native-reanimated';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { ThemeProvider, useTheme } from '@/hooks/use-theme';
+import { useAuthGate } from '@/navigation/AppNavigator';
+import OrbitalPreloader from '@/components/OrbitalPreloader';
 
-export const unstable_settings = {
-  anchor: '(tabs)',
-};
+function RootLayoutInner() {
+  const { isAuthenticated, isLoading } = useAuthGate();
+  const { isDark } = useTheme();
 
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
+  // Always play the preloader on cold launch — navigation is blocked until it finishes
+  const [preloaderDone, setPreloaderDone] = useState(false);
+
+  useEffect(() => {
+    // Only navigate once BOTH the preloader has finished AND auth has resolved
+    if (!preloaderDone || isLoading) return;
+    if (!isAuthenticated) {
+      router.replace('/login');
+    }
+    // If authenticated, expo-router will land on (tabs) automatically
+  }, [preloaderDone, isLoading, isAuthenticated]);
+
+  if (!preloaderDone) {
+    return <OrbitalPreloader onComplete={() => setPreloaderDone(true)} />;
+  }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+    <>
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="login" />
+        <Stack.Screen name="register" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="(tabs)/achievements" />
+        <Stack.Screen name="student-privacy" />
+        <Stack.Screen name="student-help" />
+        <Stack.Screen name="student-terms" />
+        <Stack.Screen name="instructor-privacy" />
+        <Stack.Screen name="instructor-help" />
+        <Stack.Screen name="instructor-terms" />
       </Stack>
-      <StatusBar style="auto" />
+      <StatusBar style="light" backgroundColor="#0B1120" />
+    </>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <ThemeProvider>
+      <RootLayoutInner />
     </ThemeProvider>
   );
 }
