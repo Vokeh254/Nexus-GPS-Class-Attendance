@@ -436,6 +436,35 @@ Row-Level Security (RLS) is enabled on all tables. Students can only read/write 
 
 ---
 
+## Quick Start (for forks / collaborators)
+
+The full Nexus UI is entirely in source code — it will look identical on any machine. The only thing you need to provide is a Supabase connection.
+
+```bash
+# 1. Clone
+git clone https://github.com/YOUR_USERNAME/nexus-attendance.git
+cd nexus-attendance/geoapp
+
+# 2. Install dependencies
+npm install
+
+# 3. Create your env file (copy this, fill in your values)
+cat > .env.local << 'EOF'
+EXPO_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+EOF
+
+# 4. Apply the database schema (paste into Supabase SQL Editor)
+# File: supabase/migrations/001_initial_schema.sql
+
+# 5. Start
+npx expo start
+```
+
+> The app will boot and show the full Nexus UI immediately. Without `.env.local`, the preloader and all static UI still works — only Supabase data calls will fail.
+
+---
+
 ## Environment Setup
 
 ### Prerequisites
