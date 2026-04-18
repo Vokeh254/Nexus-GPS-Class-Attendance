@@ -436,7 +436,40 @@ Row-Level Security (RLS) is enabled on all tables. Students can only read/write 
 
 ---
 
-## Quick Start (for forks / collaborators)
+## Google OAuth Setup (required for "Continue with Google")
+
+Google sign-in requires a one-time configuration in both Google Cloud Console and your Supabase project.
+
+### Step 1 — Create Google OAuth credentials
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com)
+2. Create a new project (or select existing)
+3. Navigate to **APIs & Services → Credentials**
+4. Click **Create Credentials → OAuth 2.0 Client ID**
+5. Application type: **Web application**
+6. Add these to **Authorized redirect URIs**:
+   ```
+   https://szsicpnrbnhcxakpinqa.supabase.co/auth/v1/callback
+   ```
+7. Copy the **Client ID** and **Client Secret**
+
+### Step 2 — Enable Google in Supabase
+
+1. Go to your [Supabase Dashboard](https://supabase.com/dashboard)
+2. Navigate to **Authentication → Providers → Google**
+3. Toggle **Enable Google provider**
+4. Paste your **Client ID** and **Client Secret**
+5. Save
+
+### Step 3 — Add the redirect URL to app.json
+
+The `scheme: "nexusattendance"` is already set in `app.json`. No changes needed.
+
+That's it — Google sign-in will work on device after these steps.
+
+---
+
+
 
 The full Nexus UI is entirely in source code — it will look identical on any machine. The only thing you need to provide is a Supabase connection.
 

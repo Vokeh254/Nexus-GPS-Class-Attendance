@@ -1,25 +1,48 @@
 {
   "expo": {
-    "name": "geoapp",
-    "slug": "geoapp",
+    "name": "Nexus Attendance",
+    "slug": "nexus-attendance",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "geoapp",
-    "userInterfaceStyle": "automatic",
+    "scheme": "nexusattendance",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nexus.attendance",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Nexus Attendance uses your location to verify you are physically present in the classroom before marking attendance.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Nexus Attendance uses your location to verify classroom presence.",
+        "NSFaceIDUsageDescription": "Nexus Attendance uses Face ID to securely verify your identity for attendance check-in.",
+        "NSCameraUsageDescription": "Nexus Attendance uses the camera for selfie verification during attendance check-in."
+      }
     },
     "android": {
+      "package": "com.nexus.attendance",
+      "versionCode": 1,
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0B1120",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA",
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT",
+        "VIBRATE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -28,21 +51,45 @@
     "plugins": [
       "expo-router",
       [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Nexus Attendance uses your location to verify classroom presence."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Nexus Attendance uses Face ID to verify your identity."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Nexus Attendance uses the camera for selfie verification."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#0B1120",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#0B1120"
           }
         }
       ]
     ],
     "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
-    }
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "9e414cb7-516e-4349-9ed4-22e713f73aa2"
+      }
+    },
+    "owner": "njorogekelvin"
   }
 }
