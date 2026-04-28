@@ -7,18 +7,11 @@ export interface Profile {
   role: 'student' | 'instructor'
   full_name: string
   student_id?: string
-  created_at: string
-}
-
-export interface Class {
-  id: string
-  instructor_id: string
-  name: string
-  course_code: string
-  geofence_lat: number
-  geofence_lng: number
-  geofence_radius_m: number
-  selfie_required: boolean
+  department?: string
+  staff_number?: string
+  course?: string
+  year_of_study?: string
+  avatar_url?: string
   created_at: string
 }
 
@@ -29,6 +22,29 @@ export interface ClassSession {
   started_at: string
   ended_at?: string
   is_active: boolean
+  scheduled_start?: string
+}
+
+export interface Class {
+  id: string
+  instructor_id: string
+  name: string
+  course_code: string
+  geofence_lat: number
+  geofence_lng: number
+  geofence_radius_m: number
+  selfie_required?: boolean
+  scheduled_time?: string
+  allow_outside_geofence?: boolean
+  created_at: string
+}
+
+export interface ClassMessage {
+  id: string
+  class_id: string
+  instructor_id: string
+  message: string
+  created_at: string
 }
 
 export interface Enrollment {

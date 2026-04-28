@@ -1,14 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
+import { Animated } from 'react-native';
+import { ImageBackground, Image, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../lib/supabase';
 import { useTheme } from '@/hooks/use-theme';
+import { useRealtimeClock } from '@/hooks/useRealtimeClock';
 import NexusLoader from '@/components/NexusLoader';
 import CircularProgress from '@/components/CircularProgress';
 import { GlassmorphicCard, NexusStatusBar, StreakFlame, HolographicAttendanceCard, LiveMap, CampusPulse, TimeWarpCard, NexusCoinsWallet, GhostModeToggle, EchoVoice, ChronosReplay, NexusNetwork } from '../components/nexus';
 import { NexusColors, NexusFonts, NexusSpacing, NexusRadius } from '../constants/theme';
 import GeofenceService from '../services/GeofenceService';
+import { SessionScheduler } from '../services/SessionScheduler';
 import type { Class, ClassSession, Profile, AttendanceLog, Enrollment } from '../types';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
@@ -85,6 +89,7 @@ function zoneLabel(zone: ProximityZone): string {
 
 export default function HomeScreen() {
   const { colors, isDark } = useTheme();
+  const now = useRealtimeClock();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [classes, setClasses] = useState<EnrolledClass[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,6 +104,29 @@ export default function HomeScreen() {
 
   // ── Student-only state ──────────────────────────────────────────────────────
   const [streakDays, setStreakDays] = useState(0);
+  const streakPulse = useRef(new Animated.Value(1)).current;
+  const streakGlow = useRef(new Animated.Value(0.4)).current;
+
+  useEffect(() => {
+    const pulse = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(streakPulse, { toValue: 1.12, duration: 700, useNativeDriver: true }),
+          Animated.timing(streakGlow, { toValue: 1, duration: 700, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(streakPulse, { toValue: 0.96, duration: 500, useNativeDriver: true }),
+          Animated.timing(streakGlow, { toValue: 0.4, duration: 500, useNativeDriver: true }),
+        ]),
+        Animated.parallel([
+          Animated.timing(streakPulse, { toValue: 1, duration: 300, useNativeDriver: true }),
+          Animated.timing(streakGlow, { toValue: 0.6, duration: 300, useNativeDriver: true }),
+        ]),
+      ])
+    );
+    pulse.start();
+    return () => pulse.stop();
+  }, [streakPulse, streakGlow]);
   const [nextSession, setNextSession] = useState<(ClassSession & { className: string; courseCode: string; room?: string }) | null>(null);
   const [todayLogs, setTodayLogs] = useState<AttendanceLog[]>([]);
   const [proximityZone, setProximityZone] = useState<ProximityZone>('far');
@@ -113,6 +141,9 @@ export default function HomeScreen() {
   const [showEcho, setShowEcho]       = useState(false);
   const [showChronos, setShowChronos] = useState(false);
   const [showNetwork, setShowNetwork] = useState(false);
+  // Enrollment state
+  const [availableClasses, setAvailableClasses] = useState<Class[]>([]);
+  const [enrollingId, setEnrollingId] = useState<string | null>(null);
 
   // ── Instructor-only state ────────────────────────────────────────────────────
   const [selectedClassIndex, setSelectedClassIndex] = useState(0);
@@ -144,6 +175,17 @@ export default function HomeScreen() {
       } else {
         const { data } = await supabase.from('enrollments').select('class_id, classes(*)').eq('student_id', user.id);
         classRows = (data ?? []).map((e: any) => e.classes as Class);
+
+        // Fetch ALL available classes so student can enroll
+        const enrolledIds = classRows.map(c => c.id);
+        const { data: allClasses } = await supabase
+          .from('classes')
+          .select('*')
+          .order('created_at', { ascending: false });
+        // Show only classes the student is NOT yet enrolled in
+        setAvailableClasses(
+          (allClasses ?? []).filter((c: Class) => !enrolledIds.includes(c.id))
+        );
         
         // Fetch attendance stats for students
         if (classRows.length > 0) {
@@ -310,96 +352,8 @@ export default function HomeScreen() {
           return { class: cls, activeSession: session ?? null };
         })
       );
-      
-      // Add placeholder classes if none exist (for presentation)
-      if (results.length === 0 && prof?.role === 'student') {
-        setClasses([
-          {
-            class: {
-              id: 'demo-class-1',
-              instructor_id: 'demo-instructor',
-              name: 'Mobile App Development',
-              course_code: 'CS401',
-              geofence_lat: 0,
-              geofence_lng: 0,
-              geofence_radius_m: 50,
-              created_at: new Date().toISOString()
-            } as Class,
-            activeSession: null
-          },
-          {
-            class: {
-              id: 'demo-class-2',
-              instructor_id: 'demo-instructor',
-              name: 'Advanced Calculus II',
-              course_code: 'MATH302',
-              geofence_lat: 0,
-              geofence_lng: 0,
-              geofence_radius_m: 50,
-              created_at: new Date().toISOString()
-            } as Class,
-            activeSession: null
-          },
-          {
-            class: {
-              id: 'demo-class-3',
-              instructor_id: 'demo-instructor',
-              name: 'Data Structures & Algorithms',
-              course_code: 'CS301',
-              geofence_lat: 0,
-              geofence_lng: 0,
-              geofence_radius_m: 50,
-              created_at: new Date().toISOString()
-            } as Class,
-            activeSession: null
-          },
-          {
-            class: {
-              id: 'demo-class-4',
-              instructor_id: 'demo-instructor',
-              name: 'Database Management Systems',
-              course_code: 'CS350',
-              geofence_lat: 0,
-              geofence_lng: 0,
-              geofence_radius_m: 50,
-              created_at: new Date().toISOString()
-            } as Class,
-            activeSession: null
-          }
-        ]);
-      } else if (results.length === 0 && prof?.role === 'instructor') {
-        // Add placeholder classes for instructors
-        setClasses([
-          {
-            class: {
-              id: 'demo-class-1',
-              instructor_id: user.id,
-              name: 'Mobile App Development',
-              course_code: 'CS401',
-              geofence_lat: 0,
-              geofence_lng: 0,
-              geofence_radius_m: 50,
-              created_at: new Date().toISOString()
-            } as Class,
-            activeSession: null
-          },
-          {
-            class: {
-              id: 'demo-class-2',
-              instructor_id: user.id,
-              name: 'Software Engineering',
-              course_code: 'CS402',
-              geofence_lat: 0,
-              geofence_lng: 0,
-              geofence_radius_m: 50,
-              created_at: new Date().toISOString()
-            } as Class,
-            activeSession: null
-          }
-        ]);
-      } else {
-        setClasses(results);
-      }
+
+      setClasses(results);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -408,51 +362,72 @@ export default function HomeScreen() {
 
   useEffect(() => { 
     fetchData();
-    
-    const setupRealtimeSubscription = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+    return () => {
+      SessionScheduler.stop();
+    };
+  }, [fetchData]);
+
+  // ── Realtime subscription — separate effect, runs once after profile loads ──
+  useEffect(() => {
+    if (!profile) return;
+
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    const setup = async () => {
+      // Re-use profile.id already resolved by fetchData — no extra getUser() call
+      const userId = profile.id;
 
       let classIds: string[] = [];
-      if (profile?.role === 'instructor') {
-        const { data } = await supabase.from('classes').select('id').eq('instructor_id', user.id);
+      if (profile.role === 'instructor') {
+        const { data } = await supabase.from('classes').select('id').eq('instructor_id', userId);
         classIds = (data ?? []).map(c => c.id);
+        SessionScheduler.start();
       } else {
-        const { data } = await supabase.from('enrollments').select('class_id').eq('student_id', user.id);
+        const { data } = await supabase.from('enrollments').select('class_id').eq('student_id', userId);
         classIds = (data ?? []).map(e => e.class_id);
       }
 
       if (classIds.length === 0) return;
 
-      const channel = supabase
-        .channel('class_sessions_changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'class_sessions',
-            filter: `class_id=in.(${classIds.join(',')})`
-          },
-          () => fetchData()
-        )
+      // Unique channel name per user to avoid duplicate subscription errors
+      channel = supabase
+        .channel(`sessions_${userId}`)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'class_sessions',
+          filter: `class_id=in.(${classIds.join(',')})`,
+        }, () => fetchData())
         .subscribe();
 
       setRealtimeChannel(channel);
     };
 
-    if (profile) {
-      setupRealtimeSubscription();
-    }
+    setup();
 
     return () => {
-      if (realtimeChannel) {
-        supabase.removeChannel(realtimeChannel);
-      }
+      if (channel) supabase.removeChannel(channel);
     };
-  }, [fetchData, profile]);
+  }, [profile?.id, profile?.role]);
 
   const onRefresh = () => { setRefreshing(true); fetchData(); };
+
+  // ── Enroll in a class ─────────────────────────────────────────────────────
+  async function enrollInClass(classId: string) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    setEnrollingId(classId);
+    const { error } = await supabase.from('enrollments').insert({
+      student_id: user.id,
+      class_id: classId,
+    });
+    setEnrollingId(null);
+    if (error) {
+      Alert.alert('Enrollment Failed', error.message);
+    } else {
+      fetchData(); // refresh to move class from available → enrolled
+    }
+  }
 
   // ── Student proximity polling (5-second interval) ─────────────────────────
   useEffect(() => {
@@ -593,6 +568,7 @@ export default function HomeScreen() {
   const isInstructor = profile?.role === 'instructor';
   const firstName = profile?.full_name?.split(' ')[0] ?? 'there';
   const initials = profile?.full_name?.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2) ?? '?';
+  const avatarUrl = (profile as any)?.avatar_url as string | null | undefined;
 
   const s = makeStyles(colors, isDark);
 
@@ -618,24 +594,60 @@ export default function HomeScreen() {
           }
           contentContainerStyle={nx.scrollContent}
         >
-          {/* Header greeting */}
-          <View style={nx.headerRow}>
-            <View>
-              <Text style={nx.greeting}>Hey, {firstName} 👋</Text>
-              <Text style={nx.subGreeting}>Orbit View</Text>
-            </View>
-            <TouchableOpacity
-              style={nx.avatarCircle}
-              onPress={() => router.push('/(tabs)/profile')}
+          {/* ── JKUAT Hero with real-time clock ── */}
+          <ImageBackground
+            source={require('../assets/images/jkuat-campus.jpg')}
+            style={nx.heroBg}
+            imageStyle={nx.heroBgImage}
+          >
+            <LinearGradient
+              colors={['rgba(11,17,32,0.35)', 'rgba(11,17,32,0.82)']}
+              style={nx.heroGradient}
             >
-              <Text style={nx.avatarText}>{initials}</Text>
-            </TouchableOpacity>
-          </View>
+              {/* Top row: greeting + avatar */}
+              <View style={nx.heroTopRow}>
+                <View>
+                  <Text style={nx.heroGreeting}>Hey, {firstName} 👋</Text>
+                  <Text style={nx.heroSubGreeting}>JKUAT · Orbit View</Text>
+                </View>
+                <TouchableOpacity
+                  style={nx.avatarCircle}
+                  onPress={() => router.push('/(tabs)/profile')}
+                >
+                  {avatarUrl ? (
+                    <Image source={{ uri: avatarUrl }} style={nx.avatarImage} />
+                  ) : (
+                    <Text style={nx.avatarText}>{initials}</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
 
-          {/* 5.3 — Streak Flame */}
-          <GlassmorphicCard style={nx.streakCard} glowColor={NexusColors.accentAmber}>
-            <StreakFlame streakDays={streakDays} />
-          </GlassmorphicCard>
+              {/* Streak — floating badge bottom-right of hero */}
+              <Animated.View
+                style={[
+                  nx.heroStreakBadge,
+                  {
+                    transform: [{ scale: streakPulse }],
+                    shadowOpacity: streakGlow,
+                  },
+                ]}
+              >
+                <Text style={nx.heroStreakFlame}>🔥</Text>
+                <Text style={nx.heroStreakCount}>{streakDays}</Text>
+                <Text style={nx.heroStreakLabel}>day streak</Text>
+              </Animated.View>
+
+              {/* Clock */}
+              <View style={nx.heroClockBlock}>
+                <Text style={nx.heroClockTime}>
+                  {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </Text>
+                <Text style={nx.heroClockDate}>
+                  {now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                </Text>
+              </View>
+            </LinearGradient>
+          </ImageBackground>
 
           {/* 5.4 — Next upcoming class session */}
           <GlassmorphicCard style={nx.sectionCard}>
@@ -758,6 +770,87 @@ export default function HomeScreen() {
             <GhostModeToggle enabled={ghostMode} onToggle={setGhostMode} />
           </GlassmorphicCard>
 
+          {/* ── Enrolled Units ── */}
+          {classes.length > 0 && (
+            <>
+              <Text style={nx.sectionLabel}>MY UNITS</Text>
+              {classes.map(({ class: cls, activeSession }) => (
+                <TouchableOpacity
+                  key={cls.id}
+                  activeOpacity={0.85}
+                  onPress={() => router.push({ pathname: '/student-unit-detail', params: { classId: cls.id } })}
+                >
+                  <GlassmorphicCard
+                    style={nx.enrolledUnitCard}
+                    glowColor={activeSession ? NexusColors.accentEmerald : NexusColors.borderGlow}
+                  >
+                    <View style={nx.enrolledUnitRow}>
+                      <View style={nx.enrolledUnitInfo}>
+                        <Text style={nx.enrolledUnitName}>{cls.name}</Text>
+                        <Text style={nx.enrolledUnitCode}>{cls.course_code}</Text>
+                        {cls.scheduled_time ? (
+                          <View style={nx.enrolledUnitMeta}>
+                            <Ionicons name="time-outline" size={11} color={NexusColors.textSecondary} />
+                            <Text style={nx.enrolledUnitMetaText}>{cls.scheduled_time}</Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <View style={nx.enrolledUnitRight}>
+                        {activeSession ? (
+                          <View style={nx.liveChip}>
+                            <View style={nx.liveDot} />
+                            <Text style={nx.liveChipText}>LIVE</Text>
+                          </View>
+                        ) : (
+                          <Ionicons name="chevron-forward" size={16} color={NexusColors.textDisabled} />
+                        )}
+                      </View>
+                    </View>
+                  </GlassmorphicCard>
+                </TouchableOpacity>
+              ))}
+            </>
+          )}
+
+          {/* ── Available Classes to Enroll ── */}
+          {availableClasses.length > 0 && (
+            <>
+              <Text style={nx.sectionLabel}>AVAILABLE CLASSES</Text>
+              <GlassmorphicCard style={nx.sectionCard} glowColor={NexusColors.accentIndigo}>
+                {availableClasses.map((cls, idx) => (
+                  <View
+                    key={cls.id}
+                    style={[
+                      nx.availableRow,
+                      idx < availableClasses.length - 1 && nx.availableRowBorder,
+                    ]}
+                  >
+                    <View style={nx.availableInfo}>
+                      <Text style={nx.availableName}>{cls.name}</Text>
+                      <Text style={nx.availableCode}>{cls.course_code}</Text>
+                      {cls.scheduled_time ? (
+                        <Text style={nx.availableTime}>{cls.scheduled_time}</Text>
+                      ) : null}
+                    </View>
+                    <TouchableOpacity
+                      style={[
+                        nx.enrollBtn,
+                        enrollingId === cls.id && { opacity: 0.6 },
+                      ]}
+                      onPress={() => enrollInClass(cls.id)}
+                      disabled={enrollingId === cls.id}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={nx.enrollBtnText}>
+                        {enrollingId === cls.id ? '…' : 'Enroll'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </GlassmorphicCard>
+            </>
+          )}
+
           {/* ── Phase 3: Quick-access toolbar ── */}
           <View style={nx.p3Toolbar}>
             {[
@@ -805,18 +898,41 @@ export default function HomeScreen() {
       {/* 9.2 — NexusStatusBar */}
       <NexusStatusBar gpsState="active" ntpSynced={true} />
 
-      {/* Header row */}
-      <View style={cc.headerRow}>
-        <View>
-          <Text style={cc.headerTitle}>COMMAND CENTER</Text>
-          <Text style={cc.headerSub}>Prof. {firstName}</Text>
-        </View>
-        <TouchableOpacity onPress={() => router.push('/(tabs)/profile')}>
-          <View style={cc.avatarCircle}>
-            <Text style={cc.avatarText}>{initials}</Text>
+      {/* ── JKUAT Hero with clock ── */}
+      <ImageBackground
+        source={require('../assets/images/jkuat-campus.jpg')}
+        style={cc.heroBg}
+        imageStyle={cc.heroBgImage}
+      >
+        <LinearGradient
+          colors={['rgba(11,17,32,0.3)', 'rgba(11,17,32,0.85)']}
+          style={cc.heroGradient}
+        >
+          <View style={cc.heroTopRow}>
+            <View>
+              <Text style={cc.heroTitle}>COMMAND CENTER</Text>
+              <Text style={cc.heroSub}>Prof. {firstName} · JKUAT</Text>
+            </View>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/profile')}>
+              <View style={cc.avatarCircle}>
+                {avatarUrl ? (
+                  <Image source={{ uri: avatarUrl }} style={cc.avatarImage} />
+                ) : (
+                  <Text style={cc.avatarText}>{initials}</Text>
+                )}
+              </View>
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      </View>
+          <View style={cc.heroClockBlock}>
+            <Text style={cc.heroClockTime}>
+              {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </Text>
+            <Text style={cc.heroClockDate}>
+              {now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+            </Text>
+          </View>
+        </LinearGradient>
+      </ImageBackground>
 
       {/* 9.6 — Class selector */}
       <View style={cc.selectorRow}>
@@ -917,17 +1033,24 @@ export default function HomeScreen() {
         <Text style={cc.actionsLabel}>QUICK ACTIONS</Text>
         <View style={cc.actionsGrid}>
           <TouchableOpacity
-            style={[cc.actionBtn, { borderColor: NexusColors.accentAmber }]}
-            onPress={() => Alert.alert('Extend Time', 'Session time extension coming soon!')}
+            style={[cc.actionBtn, { borderColor: NexusColors.accentCyan }]}
+            onPress={() => router.push('/(tabs)/units')}
             activeOpacity={0.8}
           >
-            <Ionicons name="time-outline" size={22} color={NexusColors.accentAmber} />
-            <Text style={[cc.actionBtnText, { color: NexusColors.accentAmber }]}>Extend Time</Text>
+            <Ionicons name="book-outline" size={22} color={NexusColors.accentCyan} />
+            <Text style={[cc.actionBtnText, { color: NexusColors.accentCyan }]}>Manage Units</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={[cc.actionBtn, { borderColor: NexusColors.accentRose }]}
-            onPress={() => Alert.alert('Close Session', 'Close session coming soon!')}
+            onPress={async () => {
+              if (!session) { Alert.alert('No active session'); return; }
+              const now = new Date().toISOString();
+              await supabase.from('class_sessions')
+                .update({ is_active: false, ended_at: now })
+                .eq('id', session.id);
+              fetchData();
+            }}
             activeOpacity={0.8}
           >
             <Ionicons name="lock-closed-outline" size={22} color={NexusColors.accentRose} />
@@ -944,14 +1067,55 @@ export default function HomeScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[cc.actionBtn, { borderColor: NexusColors.accentCyan }]}
+            style={[cc.actionBtn, { borderColor: NexusColors.accentAmber }]}
             onPress={() => router.push('/(tabs)/attendance')}
             activeOpacity={0.8}
           >
-            <Ionicons name="eye-outline" size={22} color={NexusColors.accentCyan} />
-            <Text style={[cc.actionBtnText, { color: NexusColors.accentCyan }]}>View Details</Text>
+            <Ionicons name="eye-outline" size={22} color={NexusColors.accentAmber} />
+            <Text style={[cc.actionBtnText, { color: NexusColors.accentAmber }]}>View Details</Text>
           </TouchableOpacity>
         </View>
+
+        {/* ── My Units inline section ── */}
+        <Text style={cc.actionsLabel}>MY UNITS</Text>
+        <GlassmorphicCard style={cc.unitsCard} glowColor={NexusColors.accentIndigo}>
+          {classes.length === 0 ? (
+            <Text style={cc.unitsEmptyText}>No units assigned yet.</Text>
+          ) : (
+            classes.map((ec, idx) => {
+              const isLive = ec.activeSession?.is_active === true;
+              return (
+                <TouchableOpacity
+                  key={ec.class.id}
+                  style={[cc.unitRow, idx < classes.length - 1 && cc.unitRowBorder]}
+                  onPress={() => router.push({ pathname: '/unit-detail', params: { classId: ec.class.id } })}
+                  activeOpacity={0.8}
+                >
+                  <View style={cc.unitInfo}>
+                    <Text style={cc.unitName}>{ec.class.name}</Text>
+                    <Text style={cc.unitCode}>{ec.class.course_code}</Text>
+                    {ec.class.scheduled_time ? (
+                      <Text style={cc.unitTime}>{ec.class.scheduled_time}</Text>
+                    ) : null}
+                  </View>
+                  <View style={[cc.unitStatusPill, { borderColor: isLive ? NexusColors.accentEmerald : NexusColors.textDisabled }]}>
+                    <Text style={[cc.unitStatusText, { color: isLive ? NexusColors.accentEmerald : NexusColors.textDisabled }]}>
+                      {isLive ? '● LIVE' : '— IDLE'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
+          <TouchableOpacity
+            style={cc.unitsManageBtn}
+            onPress={() => router.push('/(tabs)/units')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="settings-outline" size={14} color={NexusColors.accentIndigo} />
+            <Text style={cc.unitsManageBtnText}>Manage Units & Coordinates</Text>
+          </TouchableOpacity>
+        </GlassmorphicCard>
       </ScrollView>
 
       {/* ── Phase 3: Instructor toolbar ── */}
@@ -982,14 +1146,94 @@ const nx = StyleSheet.create({
     backgroundColor: NexusColors.bgPrimary,
   },
   scrollContent: {
-    padding: NexusSpacing.xl,
+    paddingHorizontal: NexusSpacing['2xl'],
+    paddingTop: 0,
     paddingBottom: NexusSpacing['3xl'],
+    gap: NexusSpacing.lg,
+  },
+  // Hero
+  heroBg: {
+    width: '100%',
+    height: 210,
+  },
+  heroBgImage: {
+    resizeMode: 'cover',
+  },
+  heroGradient: {
+    flex: 1,
+    paddingHorizontal: NexusSpacing['2xl'],
+    paddingTop: NexusSpacing.xl,
+    paddingBottom: NexusSpacing.xl,
+    justifyContent: 'space-between',
+    position: 'relative',
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  heroGreeting: {
+    fontSize: NexusFonts.sizes.xl,
+    fontWeight: NexusFonts.weights.bold,
+    color: '#fff',
+  },
+  heroSubGreeting: {
+    fontSize: NexusFonts.sizes.xs,
+    color: 'rgba(255,255,255,0.7)',
+    marginTop: 2,
+    letterSpacing: 1,
+  },
+  // Streak floating badge — absolute bottom-right of hero
+  heroStreakBadge: {
+    position: 'absolute',
+    bottom: NexusSpacing.xl,
+    right: NexusSpacing['2xl'],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(245, 158, 11, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.55)',
+    borderRadius: NexusRadius.full,
+    paddingHorizontal: NexusSpacing.md,
+    paddingVertical: 5,
+    shadowColor: '#F59E0B',
+    shadowOffset: { width: 0, height: 0 },
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  heroStreakFlame: {
+    fontSize: 16,
+  },
+  heroStreakCount: {
+    fontSize: NexusFonts.sizes.base,
+    fontWeight: NexusFonts.weights.bold,
+    color: '#F59E0B',
+  },
+  heroStreakLabel: {
+    fontSize: NexusFonts.sizes.xs,
+    color: 'rgba(255,255,255,0.75)',
+    fontWeight: NexusFonts.weights.medium,
+  },
+  heroClockBlock: {
+    alignItems: 'flex-start',
+  },
+  heroClockTime: {
+    fontSize: 30,
+    fontWeight: '900',
+    color: NexusColors.accentCyan,
+    letterSpacing: 1,
+  },
+  heroClockDate: {
+    fontSize: NexusFonts.sizes.xs,
+    color: 'rgba(255,255,255,0.75)',
+    marginTop: 2,
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: NexusSpacing['2xl'],
+    marginBottom: NexusSpacing.lg,
   },
   greeting: {
     fontSize: NexusFonts.sizes.xl,
@@ -1010,6 +1254,12 @@ const nx = StyleSheet.create({
     backgroundColor: NexusColors.accentCyan,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: NexusRadius.full,
   },
   avatarText: {
     color: NexusColors.bgPrimary,
@@ -1179,6 +1429,104 @@ const nx = StyleSheet.create({
     color: NexusColors.textSecondary,
     letterSpacing: NexusFonts.letterSpacing.wide,
   },
+  // Available classes enrollment
+  availableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: NexusSpacing.md,
+    gap: NexusSpacing.md,
+  },
+  availableRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: NexusColors.borderGlass,
+  },
+  availableInfo: { flex: 1 },
+  availableName: {
+    fontSize: NexusFonts.sizes.sm,
+    fontWeight: NexusFonts.weights.semibold,
+    color: NexusColors.textPrimary,
+  },
+  availableCode: {
+    fontSize: NexusFonts.sizes.xs,
+    color: NexusColors.accentCyan,
+    marginTop: 2,
+    letterSpacing: 0.5,
+  },
+  availableTime: {
+    fontSize: NexusFonts.sizes.xs,
+    color: NexusColors.textSecondary,
+    marginTop: 2,
+  },
+  enrollBtn: {
+    backgroundColor: NexusColors.accentIndigo,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  enrollBtnText: {
+    color: '#fff',
+    fontSize: NexusFonts.sizes.xs,
+    fontWeight: NexusFonts.weights.bold,
+  },
+  // Enrolled unit cards
+  enrolledUnitCard: {
+    padding: NexusSpacing.md,
+    marginBottom: NexusSpacing.sm,
+  },
+  enrolledUnitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  enrolledUnitInfo: { flex: 1, marginRight: NexusSpacing.sm },
+  enrolledUnitName: {
+    fontSize: NexusFonts.sizes.base,
+    fontWeight: NexusFonts.weights.semibold,
+    color: NexusColors.textPrimary,
+  },
+  enrolledUnitCode: {
+    fontSize: NexusFonts.sizes.xs,
+    color: NexusColors.accentCyan,
+    marginTop: 2,
+    letterSpacing: 0.8,
+  },
+  enrolledUnitMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 4,
+  },
+  enrolledUnitMetaText: {
+    fontSize: NexusFonts.sizes.xs,
+    color: NexusColors.textSecondary,
+  },
+  enrolledUnitRight: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  liveChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(16,185,129,0.15)',
+    borderWidth: 1,
+    borderColor: NexusColors.accentEmerald,
+    borderRadius: NexusRadius.full,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: NexusColors.accentEmerald,
+  },
+  liveChipText: {
+    fontSize: 10,
+    fontWeight: NexusFonts.weights.bold,
+    color: NexusColors.accentEmerald,
+    letterSpacing: 1,
+  },
 });
 
 // ── Nexus instructor (Command Center) styles ─────────────────────────────────
@@ -1191,9 +1539,55 @@ const cc = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: NexusSpacing.xl,
-    paddingTop: NexusSpacing.lg,
-    paddingBottom: NexusSpacing.md,
+    paddingHorizontal: NexusSpacing['2xl'],
+    paddingTop: NexusSpacing.xl,
+    paddingBottom: NexusSpacing.lg,
+  },
+  // Hero
+  heroBg: {
+    width: '100%',
+    height: 210,
+  },
+  heroBgImage: {
+    resizeMode: 'cover',
+  },
+  heroGradient: {
+    flex: 1,
+    paddingHorizontal: NexusSpacing['2xl'],
+    paddingTop: NexusSpacing.xl,
+    paddingBottom: NexusSpacing.xl,
+    justifyContent: 'space-between',
+  },
+  heroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  heroTitle: {
+    fontSize: NexusFonts.sizes.xs,
+    fontWeight: NexusFonts.weights.bold,
+    color: NexusColors.accentCyan,
+    letterSpacing: NexusFonts.letterSpacing.widest,
+  },
+  heroSub: {
+    fontSize: NexusFonts.sizes.lg,
+    fontWeight: NexusFonts.weights.bold,
+    color: '#fff',
+    marginTop: 2,
+  },
+  heroClockBlock: {
+    alignItems: 'flex-start',
+  },
+  heroClockTime: {
+    fontSize: 30,
+    fontWeight: '900',
+    color: NexusColors.accentCyan,
+    letterSpacing: 1,
+  },
+  heroClockDate: {
+    fontSize: NexusFonts.sizes.xs,
+    color: 'rgba(255,255,255,0.75)',
+    marginTop: 2,
   },
   headerTitle: {
     fontSize: NexusFonts.sizes.xs,
@@ -1214,6 +1608,12 @@ const cc = StyleSheet.create({
     backgroundColor: NexusColors.accentCyan,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: NexusRadius.full,
   },
   avatarText: {
     color: NexusColors.bgPrimary,
@@ -1222,8 +1622,8 @@ const cc = StyleSheet.create({
   },
   // Class selector
   selectorRow: {
-    paddingHorizontal: NexusSpacing.xl,
-    paddingBottom: NexusSpacing.md,
+    paddingHorizontal: NexusSpacing['2xl'],
+    paddingBottom: NexusSpacing.lg,
   },
   selectorLabel: {
     fontSize: NexusFonts.sizes.xs,
@@ -1257,8 +1657,10 @@ const cc = StyleSheet.create({
   },
   // Scroll content
   scrollContent: {
-    paddingHorizontal: NexusSpacing.xl,
+    paddingHorizontal: NexusSpacing['2xl'],
+    paddingTop: NexusSpacing.lg,
     paddingBottom: NexusSpacing['3xl'],
+    gap: NexusSpacing.lg,
   },
   className: {
     fontSize: NexusFonts.sizes['2xl'],
@@ -1365,7 +1767,7 @@ const cc = StyleSheet.create({
   actionsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: NexusSpacing.md,
+    gap: NexusSpacing.lg,
   },
   actionBtn: {
     width: '47%',
@@ -1375,7 +1777,7 @@ const cc = StyleSheet.create({
     backgroundColor: NexusColors.bgCard,
     borderWidth: 1,
     borderRadius: NexusRadius.lg,
-    paddingVertical: NexusSpacing.lg,
+    paddingVertical: NexusSpacing.xl,
     paddingHorizontal: NexusSpacing.lg,
   },
   actionBtnText: {
@@ -1400,6 +1802,68 @@ const cc = StyleSheet.create({
     fontWeight: NexusFonts.weights.semibold,
     color: NexusColors.textSecondary,
     letterSpacing: NexusFonts.letterSpacing.wide,
+  },
+
+  // ── My Units inline card ──────────────────────────────────────────────────
+  unitsCard: { paddingHorizontal: NexusSpacing.lg, paddingBottom: NexusSpacing.sm },
+  unitsEmptyText: {
+    color: NexusColors.textSecondary,
+    fontSize: NexusFonts.sizes.sm,
+    paddingVertical: NexusSpacing.lg,
+    textAlign: 'center',
+  },
+  unitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: NexusSpacing.md,
+    gap: NexusSpacing.md,
+  },
+  unitRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: NexusColors.borderGlass,
+  },
+  unitInfo: { flex: 1 },
+  unitName: {
+    fontSize: NexusFonts.sizes.sm,
+    fontWeight: NexusFonts.weights.semibold,
+    color: NexusColors.textPrimary,
+  },
+  unitCode: {
+    fontSize: NexusFonts.sizes.xs,
+    color: NexusColors.accentCyan,
+    marginTop: 1,
+    letterSpacing: 0.5,
+  },
+  unitTime: {
+    fontSize: NexusFonts.sizes.xs,
+    color: NexusColors.textSecondary,
+    marginTop: 1,
+  },
+  unitStatusPill: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  unitStatusText: {
+    fontSize: 10,
+    fontWeight: NexusFonts.weights.bold,
+    letterSpacing: 0.5,
+  },
+  unitsManageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: NexusSpacing.sm,
+    paddingVertical: NexusSpacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: NexusColors.borderGlass,
+  },
+  unitsManageBtnText: {
+    fontSize: NexusFonts.sizes.xs,
+    color: NexusColors.accentIndigo,
+    fontWeight: NexusFonts.weights.semibold,
   },
 });
 

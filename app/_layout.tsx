@@ -40,6 +40,8 @@ function RootLayoutInner() {
         <Stack.Screen name="instructor-privacy" />
         <Stack.Screen name="instructor-help" />
         <Stack.Screen name="instructor-terms" />
+        <Stack.Screen name="unit-detail" />
+        <Stack.Screen name="student-unit-detail" />
       </Stack>
       <StatusBar style="light" backgroundColor="#0B1120" />
     </>

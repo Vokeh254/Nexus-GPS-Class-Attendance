@@ -10,8 +10,10 @@ import {
 } from 'react-native';
 import { supabase } from '../lib/supabase';
 import NexusLoader from '@/components/NexusLoader';
-import type { Class, AttendanceLog } from '../types';
+import type { Class, AttendanceLog, ClassSession } from '../types';
 import { GlassmorphicCard, NexusStatusBar, StatChart } from '../components/nexus';
+import { AttendanceCalendar, type CalendarDay } from '@/components/nexus/AttendanceCalendar';
+import { useRealtimeClock } from '@/hooks/useRealtimeClock';
 import {
   NexusColors,
   NexusFonts,
@@ -213,6 +215,7 @@ function InstructorAnalytics() {
   const [riskStudents, setRiskStudents] = useState<StudentRisk[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const now = useRealtimeClock();
 
   const fetchData = useCallback(async () => {
     try {
@@ -563,14 +566,14 @@ const instrStyles = StyleSheet.create({
 
 function StudentAnalytics() {
   const [data, setData] = useState<ClassAnalytics[]>([]);
+  const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
+  const [selectedClass, setSelectedClass] = useState<string>('all');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
       const { data: enrollments } = await supabase
@@ -582,9 +585,10 @@ function StudentAnalytics() {
       const results: ClassAnalytics[] = await Promise.all(
         enrollments.map(async (e: any) => {
           const cls = e.classes as Class;
+
           const { data: sessions } = await supabase
             .from('class_sessions')
-            .select('id')
+            .select('id, started_at, scheduled_start')
             .eq('class_id', cls.id);
           const total = sessions?.length ?? 0;
 
@@ -594,7 +598,7 @@ function StudentAnalytics() {
             .eq('student_id', user.id)
             .eq('class_id', cls.id)
             .order('signed_at', { ascending: false })
-            .limit(100);
+            .limit(200);
 
           const attended = logs?.length ?? 0;
           return {
@@ -603,46 +607,72 @@ function StudentAnalytics() {
             total,
             rate: total > 0 ? attended / total : 0,
             logs: logs ?? [],
+            sessions: sessions ?? [],
           };
         })
       );
+
       setData(results);
+
+      // Build calendar days from all sessions + logs
+      buildCalendarDays(results, 'all');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }, []);
 
+  function buildCalendarDays(results: ClassAnalytics[], classFilter: string) {
+    const filtered = classFilter === 'all'
+      ? results
+      : results.filter(d => d.class.id === classFilter);
+
+    const dayMap = new Map<string, 'present' | 'absent'>()
+
+    for (const d of filtered) {
+      // Mark each session day
+      for (const session of (d as any).sessions ?? []) {
+        const dateStr = (session.scheduled_start ?? session.started_at ?? '').slice(0, 10)
+        if (!dateStr) continue
+        const alreadyPresent = dayMap.get(dateStr) === 'present'
+        if (!alreadyPresent) dayMap.set(dateStr, 'absent')
+      }
+      // Mark attended days as present
+      for (const log of d.logs) {
+        const dateStr = log.signed_at.slice(0, 10)
+        dayMap.set(dateStr, 'present')
+      }
+    }
+
+    const days: CalendarDay[] = Array.from(dayMap.entries()).map(([date, status]) => ({
+      date,
+      status,
+    }))
+    setCalendarDays(days)
+  }
+
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Rebuild calendar when class filter changes
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (data.length > 0) buildCalendarDays(data, selectedClass);
+  }, [selectedClass, data]);
 
   if (loading) return <NexusLoader />;
 
-  // Derived data
   const allLogs = data.flatMap((d) => d.logs);
-  const overallRate =
-    data.length > 0
-      ? data.reduce((sum, d) => sum + d.rate, 0) / data.length
-      : 0;
-
+  const overallRate = data.length > 0
+    ? data.reduce((sum, d) => sum + d.rate, 0) / data.length
+    : 0;
   const weeklyTrend = buildWeeklyTrend(allLogs);
-
-  const barData = data.map((d) => ({
-    label: d.class.course_code,
-    value: Math.round(d.rate * 100),
-  }));
-
-  // Badges
+  const barData = data.map((d) => ({ label: d.class.course_code, value: Math.round(d.rate * 100) }));
   const badges = computeBadges(allLogs);
-  // Set On Target based on overall rate
   const badgesWithOnTarget = badges.map((b) =>
     b.id === 'on_target' ? { ...b, earned: overallRate >= 0.8 } : b
   );
 
   return (
     <View style={styles.root}>
-      {/* 7.2 — NexusStatusBar */}
       <NexusStatusBar gpsState="active" ntpSynced />
 
       <ScrollView
@@ -651,23 +681,55 @@ function StudentAnalytics() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => {
-              setRefreshing(true);
-              fetchData();
-            }}
+            onRefresh={() => { setRefreshing(true); fetchData(); }}
             tintColor={NexusColors.accentCyan}
           />
         }
       >
-        {/* Screen title */}
         <Text style={styles.screenTitle}>STUDENT INTELLIGENCE</Text>
 
-        {/* 7.3 — Semester trend line chart */}
+        {/* ── Attendance Calendar ── */}
+        <GlassmorphicCard style={styles.calendarCard} glowColor={NexusColors.accentIndigo}>
+          <Text style={styles.sectionLabel}>ATTENDANCE CALENDAR</Text>
+
+          {/* Class filter pills */}
+          {data.length > 1 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterRow}
+            >
+              <TouchableOpacity
+                style={[styles.filterPill, selectedClass === 'all' && styles.filterPillActive]}
+                onPress={() => setSelectedClass('all')}
+              >
+                <Text style={[styles.filterPillText, selectedClass === 'all' && styles.filterPillTextActive]}>
+                  All
+                </Text>
+              </TouchableOpacity>
+              {data.map(d => (
+                <TouchableOpacity
+                  key={d.class.id}
+                  style={[styles.filterPill, selectedClass === d.class.id && styles.filterPillActive]}
+                  onPress={() => setSelectedClass(d.class.id)}
+                >
+                  <Text style={[styles.filterPillText, selectedClass === d.class.id && styles.filterPillTextActive]}>
+                    {d.class.course_code}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+
+          <AttendanceCalendar days={calendarDays} />
+        </GlassmorphicCard>
+
+        {/* ── Semester trend ── */}
         <GlassmorphicCard style={styles.chartCard} glowColor={NexusColors.accentCyan}>
           <StatChart type="line" data={weeklyTrend} title="Semester Trend" />
         </GlassmorphicCard>
 
-        {/* 7.4 — Per-subject bar chart */}
+        {/* ── Per-subject bar chart ── */}
         {barData.length > 0 && (
           <GlassmorphicCard style={styles.chartCard}>
             <StatChart type="bar" data={barData} title="Attendance by Subject" />
@@ -678,34 +740,21 @@ function StudentAnalytics() {
           <GlassmorphicCard style={styles.emptyCard}>
             <Text style={styles.emptyIcon}>📊</Text>
             <Text style={styles.emptyTitle}>No data yet</Text>
-            <Text style={styles.emptySub}>
-              Enroll in classes to see your attendance analytics.
-            </Text>
+            <Text style={styles.emptySub}>Enroll in classes to see your attendance analytics.</Text>
           </GlassmorphicCard>
         )}
 
-        {/* 7.5 — Achievements card */}
-        <GlassmorphicCard
-          style={styles.achievementsCard}
-          glowColor={NexusColors.accentIndigo}
-        >
+        {/* ── Achievements ── */}
+        <GlassmorphicCard style={styles.achievementsCard} glowColor={NexusColors.accentIndigo}>
           <Text style={styles.sectionLabel}>ACHIEVEMENTS</Text>
           <View style={styles.badgeGrid}>
             {badgesWithOnTarget.map((badge) => (
               <View
                 key={badge.id}
-                style={[
-                  styles.badge,
-                  badge.earned ? styles.badgeEarned : styles.badgeLocked,
-                ]}
+                style={[styles.badge, badge.earned ? styles.badgeEarned : styles.badgeLocked]}
               >
                 <Text style={styles.badgeIcon}>{badge.icon}</Text>
-                <Text
-                  style={[
-                    styles.badgeTitle,
-                    { color: badge.earned ? NexusColors.textPrimary : NexusColors.textDisabled },
-                  ]}
-                >
+                <Text style={[styles.badgeTitle, { color: badge.earned ? NexusColors.textPrimary : NexusColors.textDisabled }]}>
                   {badge.title}
                 </Text>
                 {!badge.earned && <Text style={styles.badgeLockIcon}>🔒</Text>}
@@ -714,7 +763,6 @@ function StudentAnalytics() {
           </View>
         </GlassmorphicCard>
 
-        {/* 7.6 — Export report button */}
         <TouchableOpacity
           style={styles.exportButton}
           activeOpacity={0.75}
@@ -837,6 +885,50 @@ const styles = StyleSheet.create({
     fontWeight: NexusFonts.weights.semibold,
     color: NexusColors.accentCyan,
     letterSpacing: NexusFonts.letterSpacing.wide,
+  },
+  // Real-time clock
+  clockCard: {
+    alignItems: 'center',
+    paddingVertical: NexusSpacing.xl,
+  },
+  clockTime: {
+    fontSize: 36,
+    fontWeight: '900',
+    color: NexusColors.accentCyan,
+    letterSpacing: 2,
+    fontVariant: ['tabular-nums'] as any,
+  },
+  clockDate: {
+    fontSize: NexusFonts.sizes.sm,
+    color: NexusColors.textSecondary,
+    marginTop: 4,
+  },
+  // Calendar
+  calendarCard: {
+    padding: NexusSpacing.lg,
+  },
+  filterRow: {
+    gap: NexusSpacing.sm,
+    paddingBottom: NexusSpacing.md,
+  },
+  filterPill: {
+    borderWidth: 1,
+    borderColor: NexusColors.borderGlow,
+    borderRadius: NexusRadius.full,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+  },
+  filterPillActive: {
+    backgroundColor: NexusColors.accentIndigo,
+    borderColor: NexusColors.accentIndigo,
+  },
+  filterPillText: {
+    fontSize: NexusFonts.sizes.xs,
+    color: NexusColors.textSecondary,
+    fontWeight: NexusFonts.weights.semibold,
+  },
+  filterPillTextActive: {
+    color: '#fff',
   },
 });
 

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
+import { Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
+import * as LocalAuthentication from 'expo-local-authentication';
+import MapView, { Marker, Circle } from 'react-native-maps';
 import { supabase } from '../lib/supabase';
 import GeofenceService from '../services/GeofenceService';
 import AttendanceService, { ERRORS } from '../services/AttendanceService';
@@ -108,21 +110,49 @@ export default function AttendanceScreen() {
 
   // Load session active state and checked-in count
   useEffect(() => {
-    if (!classId) return;
-    supabase.from('class_sessions')
-      .select('id, is_active')
-      .eq('class_id', classId)
-      .eq('is_active', true)
-      .maybeSingle()
-      .then(({ data: session }) => {
-        setSessionActive(session?.is_active ?? false);
-        if (session?.id) {
-          supabase.from('attendance_logs')
-            .select('id', { count: 'exact' })
-            .eq('session_id', session.id)
-            .then(({ count }) => setCheckedInCount(count ?? 0));
+    async function loadSession() {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      let targetClassId = classId;
+
+      // If no classId param, find any active session for enrolled classes
+      if (!targetClassId) {
+        const { data: enrollments } = await supabase
+          .from('enrollments').select('class_id').eq('student_id', user.id);
+        const ids = (enrollments ?? []).map((e: any) => e.class_id);
+        if (ids.length === 0) return;
+
+        const { data: active } = await supabase
+          .from('class_sessions').select('id, class_id, is_active')
+          .in('class_id', ids).eq('is_active', true).limit(1).maybeSingle();
+
+        if (active) {
+          targetClassId = active.class_id;
+          setSessionActive(true);
+          // Load class data
+          const { data: cls } = await supabase.from('classes').select('*')
+            .eq('id', active.class_id).single();
+          if (cls) { setClassData(cls); setGeofence({ lat: cls.geofence_lat, lng: cls.geofence_lng, radius_m: cls.geofence_radius_m }); }
+          const { count } = await supabase.from('attendance_logs')
+            .select('id', { count: 'exact' }).eq('session_id', active.id);
+          setCheckedInCount(count ?? 0);
         }
-      });
+        return;
+      }
+
+      const { data: session } = await supabase
+        .from('class_sessions').select('id, is_active')
+        .eq('class_id', targetClassId).eq('is_active', true).maybeSingle();
+
+      setSessionActive(session?.is_active ?? false);
+      if (session?.id) {
+        const { count } = await supabase.from('attendance_logs')
+          .select('id', { count: 'exact' }).eq('session_id', session.id);
+        setCheckedInCount(count ?? 0);
+      }
+    }
+    loadSession();
   }, [classId]);
 
   // ── Instructor: load enrolled students + attendance logs ──────────────────
@@ -238,23 +268,59 @@ export default function AttendanceScreen() {
   const requiresSelfie = classData?.selfie_required === true;
 
   async function handleMark() {
-    if (!classId || !classData) return;
-    
-    // If selfie is required, show camera first
+    if (!classData) {
+      // No specific class — find the first active session for this student
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: enrollments } = await supabase
+        .from('enrollments').select('class_id').eq('student_id', user.id);
+      const classIds = (enrollments ?? []).map((e: any) => e.class_id);
+      if (classIds.length === 0) {
+        Alert.alert('No Classes', 'You are not enrolled in any classes.');
+        return;
+      }
+      const { data: activeSessions } = await supabase
+        .from('class_sessions').select('class_id')
+        .in('class_id', classIds).eq('is_active', true).limit(1);
+      if (!activeSessions || activeSessions.length === 0) {
+        Alert.alert('No Active Session', 'No class session is currently active.');
+        return;
+      }
+      // Set classId and classData then proceed
+      const { data: cls } = await supabase.from('classes').select('*')
+        .eq('id', activeSessions[0].class_id).single();
+      if (cls) { setClassData(cls); }
+      // submitAttendance will re-query the active session
+    }
+
+    // ── Biometric ──────────────────────────────────────────────────────────
+    try {
+      const hasHardware = await LocalAuthentication.hasHardwareAsync();
+      const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+      if (hasHardware && isEnrolled) {
+        const result = await LocalAuthentication.authenticateAsync({
+          promptMessage: 'Confirm your identity to mark attendance',
+          fallbackLabel: 'Use Passcode',
+          cancelLabel: 'Cancel',
+          disableDeviceFallback: false,
+        });
+        if (!result.success) {
+          setStatus('Biometric authentication failed. Please try again.');
+          return;
+        }
+      }
+    } catch (bioErr) {
+      console.warn('Biometric check skipped:', bioErr);
+    }
+
     if (requiresSelfie && !cameraPermission?.granted) {
       const permission = await requestCameraPermission();
       if (!permission.granted) {
-        Alert.alert('Camera Permission Required', 'Please allow camera access to take a selfie for attendance verification.');
+        Alert.alert('Camera Permission Required', 'Please allow camera access to take a selfie.');
         return;
       }
     }
-    
-    if (requiresSelfie) {
-      setShowCamera(true);
-      return;
-    }
-    
-    // Mark attendance without selfie
+    if (requiresSelfie) { setShowCamera(true); return; }
     await submitAttendance();
   }
 
@@ -281,55 +347,107 @@ export default function AttendanceScreen() {
   }
 
   async function submitAttendance(selfieUri?: string) {
-    if (!classId) return;
-    setLoading(true); 
+    if (!classData) return;
+    const effectiveClassId = classId || classData.id;
+    setLoading(true);
     setStatus('');
-    
+
     try {
-      let selfieUrl: string | undefined;
-      
-      // Upload selfie if provided
-      if (selfieUri) {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          const fileName = `${Date.now()}-${user.id}.jpg`;
-          const formData = new FormData();
-          formData.append('file', {
-            uri: selfieUri,
-            type: 'image/jpeg',
-            name: fileName,
-          } as any);
-          
-          const { data, error } = await supabase.storage
-            .from('selfies')
-            .upload(`${classId}/${fileName}`, formData, {
-              contentType: 'image/jpeg',
-            });
-          
-          if (error) {
-            console.error('Selfie upload error:', error);
-            Alert.alert('Error', 'Failed to upload selfie. Please try again.');
-            return;
-          }
-          
-          if (data) {
-            const { data: { publicUrl } } = supabase.storage
-              .from('selfies')
-              .getPublicUrl(data.path);
-            selfieUrl = publicUrl;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setStatus(ERRORS.auth_required); setLoading(false); return; }
+
+      // 1. Find the active session for this class
+      const { data: session } = await supabase
+        .from('class_sessions')
+        .select('id, scheduled_start, started_at')
+        .eq('class_id', effectiveClassId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (!session) { setStatus(ERRORS.session_not_active); setLoading(false); return; }
+
+      // 2. Check already signed
+      const { data: existing } = await supabase
+        .from('attendance_logs')
+        .select('id')
+        .eq('session_id', session.id)
+        .eq('student_id', user.id)
+        .maybeSingle();
+
+      if (existing) { setStatus(ERRORS.already_signed); setConfirmed(true); setLoading(false); return; }
+
+      // 3. Get GPS coords (best-effort — use 0,0 if unavailable on web)
+      let lat = 0, lng = 0, acc = 0;
+      const locResult = await GeofenceService.getCurrentLocation();
+      if (locResult.success) {
+        lat = locResult.coords.latitude;
+        lng = locResult.coords.longitude;
+        acc = locResult.accuracyMetres;
+
+        // 4. Geofence check — only if instructor restricted it AND coords are set
+        if (!classData.allow_outside_geofence && classData.geofence_lat !== 0) {
+          const fence = {
+            latitude: classData.geofence_lat,
+            longitude: classData.geofence_lng,
+            radius_m: classData.geofence_radius_m,
+          };
+          const check = GeofenceService.isWithinGeofence({ latitude: lat, longitude: lng }, fence);
+          if (!check.inside) {
+            const dist = Math.round((check as any).distanceMetres ?? 0);
+            setStatus(`You are ${dist}m from the classroom. Must be within ${classData.geofence_radius_m}m.`);
+            setLoading(false); return;
           }
         }
       }
-      
-      const result = await AttendanceService.markAttendance(classId, selfieUrl);
-      if (result.success) {
-        setStatus('Attendance marked successfully!');
-        setConfirmed(true);
-      } else {
-        setStatus(ERRORS[result.reason] ?? ERRORS.server_error);
+
+      // 5. Upload selfie if provided
+      let selfieUrl: string | undefined;
+      if (selfieUri) {
+        const fileName = `${Date.now()}-${user.id}.jpg`;
+        const formData = new FormData();
+        formData.append('file', { uri: selfieUri, type: 'image/jpeg', name: fileName } as any);
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from('selfies')
+          .upload(`${effectiveClassId}/${fileName}`, formData, { contentType: 'image/jpeg' });
+        if (!uploadErr && uploadData) {
+          selfieUrl = supabase.storage.from('selfies').getPublicUrl(uploadData.path).data.publicUrl;
+        }
       }
-    } catch (error) {
-      console.error('Attendance submission error:', error);
+
+      // 6. Insert attendance log directly
+      const { error: insertErr } = await supabase.from('attendance_logs').insert({
+        session_id: session.id,
+        student_id: user.id,
+        class_id: effectiveClassId,
+        signed_at: new Date().toISOString(),
+        latitude: lat,
+        longitude: lng,
+        accuracy_m: acc,
+        verified: true,
+        ...(selfieUrl ? { selfie_url: selfieUrl } : {}),
+      });
+
+      if (insertErr) {
+        console.error('Attendance insert error:', insertErr);
+        setStatus(ERRORS.server_error);
+        setLoading(false); return;
+      }
+
+      // 7. Award Nexus Coins if within 15 min of session start
+      const startIso = session.scheduled_start ?? session.started_at;
+      const minsLate = Math.round((new Date(startIso).getTime() - Date.now()) / 60000);
+      if (minsLate >= -15) {
+        await supabase.from('nexus_coins_ledger').insert({
+          student_id: user.id, class_id: effectiveClassId, session_id: session.id,
+          amount: 10, reason: 'early_attendance',
+        }).then(() => {});
+      }
+
+      setStatus('Attendance marked successfully!');
+      setConfirmed(true);
+      setCheckedInCount(prev => prev + 1);
+    } catch (err) {
+      console.error('Attendance submission error:', err);
       setStatus(ERRORS.server_error);
     } finally {
       setLoading(false);
@@ -637,12 +755,73 @@ export default function AttendanceScreen() {
           <View style={nx.buttonWrapper}>
             <AttendanceButton
               onPress={handleMark}
-              disabled={!inside || !accuracyOk || !sessionActive}
+              disabled={!sessionActive || confirmed}
               loading={loading}
               confirmed={confirmed}
             />
           </View>
         </GlassmorphicCard>
+
+        {/* ── Map: directions to classroom ── */}
+        {geofence && geofence.lat !== 0 && (
+          <GlassmorphicCard style={nx.sectionCard} glowColor={NexusColors.accentCyan}>
+            <View style={nx.mapHeader}>
+              <Ionicons name="map-outline" size={14} color={NexusColors.accentCyan} />
+              <Text style={nx.mapTitle}>CLASSROOM LOCATION</Text>
+              <TouchableOpacity
+                style={nx.directionsBtn}
+                onPress={() => {
+                  const url = Platform.select({
+                    ios: `maps://app?daddr=${geofence.lat},${geofence.lng}`,
+                    android: `google.navigation:q=${geofence.lat},${geofence.lng}`,
+                    default: `https://www.google.com/maps/dir/?api=1&destination=${geofence.lat},${geofence.lng}`,
+                  })
+                  Linking.openURL(url!)
+                }}
+              >
+                <Ionicons name="navigate-outline" size={13} color={NexusColors.bgPrimary} />
+                <Text style={nx.directionsBtnText}>Directions</Text>
+              </TouchableOpacity>
+            </View>
+            <MapView
+              style={nx.map}
+              initialRegion={{
+                latitude: geofence.lat,
+                longitude: geofence.lng,
+                latitudeDelta: 0.002,
+                longitudeDelta: 0.002,
+              }}
+              scrollEnabled={false}
+              zoomEnabled={false}
+              pitchEnabled={false}
+              rotateEnabled={false}
+            >
+              <Marker
+                coordinate={{ latitude: geofence.lat, longitude: geofence.lng }}
+                title={classData?.name ?? 'Classroom'}
+                description={classData?.course_code}
+                pinColor={NexusColors.accentCyan}
+              />
+              <Circle
+                center={{ latitude: geofence.lat, longitude: geofence.lng }}
+                radius={geofence.radius_m}
+                strokeColor={NexusColors.accentCyan}
+                fillColor="rgba(6,182,212,0.12)"
+                strokeWidth={2}
+              />
+              {locationResult?.success && (
+                <Marker
+                  coordinate={{
+                    latitude: locationResult.coords.latitude,
+                    longitude: locationResult.coords.longitude,
+                  }}
+                  title="You"
+                  pinColor={inside ? NexusColors.accentEmerald : NexusColors.accentRose}
+                />
+              )}
+            </MapView>
+          </GlassmorphicCard>
+        )}
 
         {/* ── Phase 3: Quick-action toolbar ── */}
         <View style={nx.p3Toolbar}>
@@ -1036,6 +1215,22 @@ const nx = StyleSheet.create({
     color: NexusColors.textSecondary,
     letterSpacing: NexusFonts.letterSpacing.wide,
   },
+  // Map card
+  sectionCard: { marginBottom: NexusSpacing.lg, padding: NexusSpacing.lg },
+  mapHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10,
+  },
+  mapTitle: {
+    flex: 1, fontSize: NexusFonts.sizes.xs, fontWeight: NexusFonts.weights.bold,
+    color: NexusColors.textSecondary, letterSpacing: 1.5,
+  },
+  directionsBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: NexusColors.accentCyan, borderRadius: NexusRadius.full,
+    paddingHorizontal: 10, paddingVertical: 5,
+  },
+  directionsBtnText: { fontSize: 11, fontWeight: '700', color: NexusColors.bgPrimary },
+  map: { width: '100%', height: 180, borderRadius: NexusRadius.md, overflow: 'hidden' },
 });
 
 // ── Nexus instructor styles ───────────────────────────────────────────────────

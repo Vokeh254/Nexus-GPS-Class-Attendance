@@ -41,7 +41,7 @@ export default function TimeWarpCard({ nextSession, isInsideGeofence, sessionAct
 
   // Tick every 30s to keep countdown fresh
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 30000);
+    const id = setInterval(() => setNow(Date.now()), 10000);
     return () => clearInterval(id);
   }, []);
 
